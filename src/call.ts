@@ -61,6 +61,7 @@ export class EchoLocalCall extends LitElement {
   @state() private muted = false;
   @state() private blind = false;
   @state() private full = false;
+  @state() private blocked = false;
 
   @query("#far") private far?: HTMLVideoElement;
   @query("#near") private near?: HTMLVideoElement;
@@ -160,10 +161,24 @@ export class EchoLocalCall extends LitElement {
       if (this.near && this.local && this.near.srcObject !== this.local) {
         this.near.srcObject = this.local;
       }
+      if (this.far?.srcObject && this.far.paused) this.play();
     });
   }
 
+  // Android WebView refuses unmuted playback without a tap unless the app allows autoplay.
+  private play() {
+    this.far
+      ?.play()
+      .then(() => {
+        this.blocked = false;
+      })
+      .catch((err: DOMException) => {
+        if (err.name === "NotAllowedError") this.blocked = true;
+      });
+  }
+
   private release() {
+    this.blocked = false;
     this.pc?.close();
     this.pc = undefined;
     for (const track of this.local?.getTracks() ?? []) track.stop();
@@ -261,6 +276,11 @@ export class EchoLocalCall extends LitElement {
                     : nothing}
                 `
               : html`
+                  ${this.blocked
+                    ? html`<button class="round go" @click=${this.play}>
+                        <ha-icon icon="mdi:play"></ha-icon><span>Play</span>
+                      </button>`
+                    : nothing}
                   <button class="round" data-on=${String(this.muted)} @click=${this.toggleMute}>
                     <ha-icon icon=${this.muted ? "mdi:microphone-off" : "mdi:microphone"}></ha-icon>
                   </button>
