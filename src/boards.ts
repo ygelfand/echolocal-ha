@@ -1,5 +1,6 @@
 import amber from "./devices/amber.svg";
 import blueberry from "./devices/blueberry.svg";
+import cube from "./devices/cube.svg";
 import ivy from "./devices/ivy.svg";
 import opal from "./devices/opal.svg";
 import penghu from "./devices/penghu.svg";
@@ -21,6 +22,7 @@ const LOOKS: Record<string, Look> = {
   crown: { shape: "show", lens: "round", width: 360 },
   amber: { shape: "panel", picture: amber, width: 340, screen: { x: 104, y: 61, w: 175, h: 108 } },
   blueberry: { shape: "panel", picture: blueberry, width: 380, screen: { x: 98, y: 24, w: 202, h: 142 } },
+  cube: { shape: "panel", picture: cube, width: 300, screen: { x: 85, y: 53, w: 150, h: 90 } },
   ivy: { shape: "panel", picture: ivy, width: 320, screen: { x: 80, y: 24, w: 160, h: 92 } },
   opal: { shape: "panel", picture: opal, width: 340, screen: { x: 96, y: 62, w: 128, h: 80 } },
   penghu: { shape: "panel", picture: penghu, width: 380, screen: { x: 104, y: 61, w: 175, h: 108 } },
