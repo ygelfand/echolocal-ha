@@ -23,18 +23,25 @@ DATA = "echolocal_voices"
 UPDATED = f"{DOMAIN}_voices_updated"
 
 DEVICE_ACTION = "voice_profiles"
+DEVICE_SYNC = "voice_sync"
 WAIT = 15
+PAGE_BYTES = 32 * 1024
 
 LOOSEST = 0.30
 STRICTEST = 0.70
 
-SCHEMA = vol.Schema({vol.Optional("changes", default="[]"): str})
+SCHEMA = vol.Schema(
+    {
+        vol.Optional("changes", default="[]"): str,
+        vol.Optional("page"): vol.All(vol.Coerce(int), vol.Range(min=0)),
+    }
+)
 
 
 async def async_setup(hass: HomeAssistant) -> None:
     store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, STORE_KEY)
     saved = await store.async_load() or {}
-    hass.data[DATA] = {"store": store, "profiles": saved.get("profiles", [])}
+    hass.data[DATA] = {"store": store, "profiles": saved.get("profiles", []), "revision": 0}
 
     async def exchange(call: ServiceCall) -> ServiceResponse:
         try:
@@ -47,6 +54,8 @@ async def async_setup(hass: HomeAssistant) -> None:
             raise HomeAssistantError("voice changes must be a list")
         if await _apply(hass, changes):
             hass.async_create_task(_push(hass))
+        if "page" in call.data:
+            return _page(hass.data[DATA], call.data["page"])
         return {"profiles": hass.data[DATA]["profiles"]}
 
     hass.services.async_register(
@@ -56,6 +65,24 @@ async def async_setup(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_threshold)
     websocket_api.async_register_command(hass, ws_remove)
     websocket_api.async_register_command(hass, ws_person)
+
+
+def _page(data: dict[str, Any], start: int) -> dict[str, Any]:
+    profiles = data["profiles"]
+    out: list[dict[str, Any]] = []
+    size = 2
+    at = min(start, len(profiles))
+    while at < len(profiles):
+        one = len(json.dumps(profiles[at])) + 1
+        if out and size + one > PAGE_BYTES:
+            break
+        out.append(profiles[at])
+        size += one
+        at += 1
+    reply: dict[str, Any] = {"profiles": out, "revision": data["revision"]}
+    if at < len(profiles):
+        reply["next"] = at
+    return reply
 
 
 def _valid(profile: Any) -> bool:
@@ -92,6 +119,7 @@ async def _apply(hass: HomeAssistant, changes: list[Any]) -> bool:
             changed = True
     if changed:
         data["profiles"] = sorted(profiles.values(), key=lambda p: p["name"].lower())
+        data["revision"] += 1
         await data["store"].async_save({"profiles": data["profiles"]})
         hass.bus.async_fire(UPDATED)
     return changed
@@ -100,6 +128,11 @@ async def _apply(hass: HomeAssistant, changes: list[Any]) -> bool:
 async def _send(hass: HomeAssistant, node: str) -> None:
     try:
         async with asyncio.timeout(WAIT):
+            if hass.services.has_service(ESPHOME_DOMAIN, f"{node}_{DEVICE_SYNC}"):
+                await hass.services.async_call(
+                    ESPHOME_DOMAIN, f"{node}_{DEVICE_SYNC}", {}, blocking=True
+                )
+                return
             await hass.services.async_call(
                 ESPHOME_DOMAIN,
                 f"{node}_{DEVICE_ACTION}",
@@ -111,11 +144,16 @@ async def _send(hass: HomeAssistant, node: str) -> None:
         _LOGGER.warning("sending voices to %s failed: %s", node, err)
 
 
+def _reachable(hass: HomeAssistant, node: str) -> bool:
+    return any(
+        hass.services.has_service(ESPHOME_DOMAIN, f"{node}_{action}")
+        for action in (DEVICE_SYNC, DEVICE_ACTION)
+    )
+
+
 async def _push(hass: HomeAssistant) -> None:
     nodes = [
-        node
-        for _, node, online in _devices(hass)
-        if online and node and hass.services.has_service(ESPHOME_DOMAIN, f"{node}_{DEVICE_ACTION}")
+        node for _, node, online in _devices(hass) if online and node and _reachable(hass, node)
     ]
     await asyncio.gather(*(_send(hass, node) for node in nodes))
 
