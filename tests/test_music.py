@@ -1,7 +1,10 @@
 from types import SimpleNamespace as NS
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 
+from custom_components.echolocal import music
 from custom_components.echolocal.music import (
     contents,
     favorite,
@@ -279,3 +282,19 @@ async def test_liking_a_track_not_in_the_library_adds_it():
 async def test_nothing_playing_is_unknown():
     got = await favorite(NS(music=FakeFavorites({})), playing(None), True)
     assert got == {"known": False, "favorite": False, "title": ""}
+
+
+@pytest.mark.parametrize(
+    ("service", "data"),
+    [
+        ("music_search", {"query": "x"}),
+        ("music_recommendations", {}),
+        ("music_library", {"media_type": "album"}),
+    ],
+)
+async def test_without_music_assistant_the_services_say_so(hass: HomeAssistant, service, data):
+    music.async_setup(hass)
+    with pytest.raises(ServiceValidationError, match="Music Assistant is not set up"):
+        await hass.services.async_call(
+            "echolocal", service, data, blocking=True, return_response=True
+        )

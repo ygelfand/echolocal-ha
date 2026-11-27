@@ -1,6 +1,25 @@
 import pytest
+from homeassistant.auth.models import User
+from homeassistant.core import Context, HomeAssistant
+from homeassistant.exceptions import Unauthorized
 
+from custom_components.echolocal import fetch
 from custom_components.echolocal.fetch import allowed, total_of
+
+
+async def test_only_administrators_and_devices_may_call_fetch(
+    hass: HomeAssistant, hass_read_only_user: User
+):
+    fetch.async_setup(hass)
+    with pytest.raises(Unauthorized):
+        await hass.services.async_call(
+            "echolocal",
+            "fetch",
+            {"url": "https://github.com/x"},
+            blocking=True,
+            return_response=True,
+            context=Context(user_id=hass_read_only_user.id),
+        )
 
 
 @pytest.mark.parametrize(

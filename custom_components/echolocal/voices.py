@@ -10,6 +10,7 @@ from homeassistant.components import websocket_api
 from homeassistant.components.esphome import DOMAIN as ESPHOME_DOMAIN
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN
@@ -58,8 +59,8 @@ async def async_setup(hass: HomeAssistant) -> None:
             return _page(hass.data[DATA], call.data["page"])
         return {"profiles": hass.data[DATA]["profiles"]}
 
-    hass.services.async_register(
-        DOMAIN, "voices", exchange, schema=SCHEMA, supports_response=SupportsResponse.ONLY
+    async_register_admin_service(
+        hass, DOMAIN, "voices", exchange, schema=SCHEMA, supports_response=SupportsResponse.ONLY
     )
     websocket_api.async_register_command(hass, ws_list)
     websocket_api.async_register_command(hass, ws_threshold)

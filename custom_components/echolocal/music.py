@@ -190,7 +190,12 @@ async def recommended(mass: Any, limit: int, parse: Any) -> dict[str, Any]:
 
 
 def clients(hass: HomeAssistant) -> list[Any]:
-    return [e.runtime_data.mass for e in hass.config_entries.async_loaded_entries(MUSIC_ASSISTANT)]
+    entries = hass.config_entries.async_loaded_entries(MUSIC_ASSISTANT)
+    if not entries:
+        return []
+    from homeassistant.components.music_assistant.helpers import get_music_assistant_client
+
+    return [get_music_assistant_client(hass, e.entry_id) for e in entries]
 
 
 def first_client(hass: HomeAssistant) -> Any:
@@ -261,9 +266,9 @@ def async_setup(hass: HomeAssistant) -> None:
         return {"items": [media(mass, i) for i in playable(items)]}
 
     async def music_recommendations(call: ServiceCall) -> ServiceResponse:
+        mass = first_client(hass)
         from music_assistant_models.media_items import media_from_dict
 
-        mass = first_client(hass)
         return await recommended(mass, call.data["limit"], media_from_dict)
 
     async def music_players(call: ServiceCall) -> ServiceResponse:
@@ -278,10 +283,11 @@ def async_setup(hass: HomeAssistant) -> None:
         return await contents(first_client(hass), call.data["uri"], call.data["limit"])
 
     async def music_search(call: ServiceCall) -> ServiceResponse:
+        mass = first_client(hass)
         from music_assistant_models.enums import MediaType
 
         kinds = [MediaType(k) for k in SEARCH_KINDS]
-        return await searched(first_client(hass), call.data["query"], call.data["limit"], kinds)
+        return await searched(mass, call.data["query"], call.data["limit"], kinds)
 
     async def music_library(call: ServiceCall) -> ServiceResponse:
         return await shelf(first_client(hass), call.data["media_type"], call.data["limit"])

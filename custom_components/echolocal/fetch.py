@@ -12,6 +12,7 @@ import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.service import async_register_admin_service
 
 from .const import DOMAIN
 
@@ -172,6 +173,6 @@ def async_setup(hass: HomeAssistant) -> None:
         except (aiohttp.ClientError, TimeoutError) as err:
             raise HomeAssistantError(f"downloading {url}: {err}") from err
 
-    hass.services.async_register(
-        DOMAIN, "fetch", fetch, schema=SCHEMA, supports_response=SupportsResponse.ONLY
+    async_register_admin_service(
+        hass, DOMAIN, "fetch", fetch, schema=SCHEMA, supports_response=SupportsResponse.ONLY
     )

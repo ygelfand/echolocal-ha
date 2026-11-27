@@ -1,8 +1,26 @@
 import json
 
-from homeassistant.core import HomeAssistant
+import pytest
+from homeassistant.auth.models import User
+from homeassistant.core import Context, HomeAssistant
+from homeassistant.exceptions import Unauthorized
 
 from custom_components.echolocal import voices
+
+
+async def test_only_administrators_and_devices_may_call_voices(
+    hass: HomeAssistant, hass_read_only_user: User
+):
+    await voices.async_setup(hass)
+    with pytest.raises(Unauthorized):
+        await hass.services.async_call(
+            "echolocal",
+            "voices",
+            {"changes": "[]"},
+            blocking=True,
+            return_response=True,
+            context=Context(user_id=hass_read_only_user.id),
+        )
 
 
 def voice(id_: str, name: str, threshold: float = 0.5) -> dict:
