@@ -7,7 +7,6 @@
   "config_flow": true,
   "dependencies": [
     "assist_pipeline",
-    "conversation",
     "esphome",
     "frontend",
     "http",

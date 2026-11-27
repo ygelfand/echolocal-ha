@@ -87,16 +87,6 @@
         }
       }
     },
-    "speaker": {
-      "name": "Speaker",
-      "description": "Returns who is speaking in the turn a device is running: match, person, name and score.",
-      "fields": {
-        "device_id": {
-          "name": "Device",
-          "description": "The device running the turn."
-        }
-      }
-    },
     "music_queue": {
       "name": "Music Assistant queue",
       "description": "Returns the tracks after the one playing on a Music Assistant player.",

@@ -19,6 +19,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.network import NoURLAvailableError, get_url
 
+from . import personal
 from .const import ACTIONS_EVENT, MANUFACTURERS
 
 _LOGGER = logging.getLogger(__name__)
@@ -168,7 +169,11 @@ class Triggers:
         except HomeAssistantError as err:
             _LOGGER.warning("%s on %s failed: %s", name, node, err)
             return FAILED
-        reply = _reply(response)
+        answer = _field(response, "answer")
+        if name == personal.ACTION and answer is not None:
+            reply = await personal.answer(self.hass, device_id, answer, values)
+        else:
+            reply = _reply(response)
         return FAILED if reply is None else reply
 
     def as_dict(self) -> dict[str, Any]:
@@ -255,15 +260,20 @@ def _pipeline(hass: HomeAssistant, device_id: str | None) -> Any:
     return assist_pipeline.async_get_pipeline(hass)
 
 
-def _reply(response: Any) -> str | None:
+def _field(response: Any, key: str) -> Any:
     if not isinstance(response, dict):
         return None
-    if isinstance(response.get("reply"), str):
-        return response["reply"]
+    if key in response:
+        return response[key]
     inner = response.get("response")
-    if isinstance(inner, dict) and isinstance(inner.get("reply"), str):
-        return inner["reply"]
+    if isinstance(inner, dict):
+        return inner.get(key)
     return None
+
+
+def _reply(response: Any) -> str | None:
+    reply = _field(response, "reply")
+    return reply if isinstance(reply, str) else None
 
 
 def _node(hass: HomeAssistant, device_id: str | None) -> str | None:

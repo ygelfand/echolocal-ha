@@ -1,31 +1,23 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-import probatio
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.components.esphome import DOMAIN as ESPHOME_DOMAIN
-from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import (
-    config_validation as cv,
-    device_registry as dr,
-    entity_registry as er,
-    intent,
-)
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.event import async_track_point_in_utc_time
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util, slugify
 
 from .const import DOMAIN
-from .fleet import _devices
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,8 +25,6 @@ STORE_KEY = f"{DOMAIN}.people"
 STORE_VERSION = 1
 DATA = "echolocal_people"
 
-DEVICE_ACTION = "turn_speaker"
-WAIT = 5
 MOBILE_APP = "mobile_app"
 MOST_EVENTS = 5
 
@@ -71,16 +61,6 @@ class Refusal(Exception):
 Handle = Callable[[HomeAssistant, Asker, dict[str, Any], str | None], Awaitable[str]]
 
 
-@dataclass(frozen=True)
-class Personal:
-    intent_type: str
-    description: str
-    sentences: list[tuple[list[str], dict[str, Any]]]
-    slots: dict[Any, Any]
-    handle: Handle
-    needs: tuple[Field, ...] = field(default=())
-
-
 async def async_setup(hass: HomeAssistant) -> None:
     store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, STORE_KEY)
     saved = await store.async_load() or {}
@@ -93,20 +73,6 @@ async def async_setup(hass: HomeAssistant) -> None:
     for reminder in list(hass.data[DATA]["reminders"]):
         _schedule(hass, reminder)
 
-    for action in ACTIONS:
-        intent.async_register(hass, PersonalHandler(action))
-    _register_sentences(hass)
-
-    async def who(call: ServiceCall) -> ServiceResponse:
-        return await speaker(hass, call.data["device_id"])
-
-    hass.services.async_register(
-        DOMAIN,
-        "speaker",
-        who,
-        schema=vol.Schema({vol.Required("device_id"): cv.string}),
-        supports_response=SupportsResponse.ONLY,
-    )
     websocket_api.async_register_command(hass, ws_people)
     websocket_api.async_register_command(hass, ws_save)
 
@@ -116,40 +82,12 @@ async def _save(hass: HomeAssistant) -> None:
     await data["store"].async_save({"people": data["people"], "reminders": data["reminders"]})
 
 
-def _node(hass: HomeAssistant, device_id: str) -> str | None:
-    device = dr.async_get(hass).async_get(device_id)
-    if device is None:
-        return None
-    top = device.via_device_id or device.id
-    return next((node for d, node, _ in _devices(hass) if d.id == top), None)
-
-
-async def speaker(hass: HomeAssistant, device_id: str | None) -> dict[str, Any]:
-    node = _node(hass, device_id) if device_id else None
-    if node is None or not hass.services.has_service(ESPHOME_DOMAIN, f"{node}_{DEVICE_ACTION}"):
-        return {"match": "none"}
-    try:
-        async with asyncio.timeout(WAIT):
-            answer = await hass.services.async_call(
-                ESPHOME_DOMAIN,
-                f"{node}_{DEVICE_ACTION}",
-                {},
-                blocking=True,
-                return_response=True,
-            )
-    except (HomeAssistantError, TimeoutError) as err:
-        _LOGGER.warning("asking %s who is speaking failed: %s", node, err)
-        return {"match": "none"}
-    return dict(answer or {"match": "none"})
-
-
 def _name(hass: HomeAssistant, person: str) -> str:
     state = hass.states.get(person)
     return state.name if state is not None else person
 
 
-async def asker(hass: HomeAssistant, device_id: str | None) -> Asker:
-    who = await speaker(hass, device_id)
+def asker(hass: HomeAssistant, who: dict[str, Any]) -> Asker:
     match = who.get("match")
     if match == PENDING:
         _LOGGER.info("voice match had not landed when a personal action asked")
@@ -268,12 +206,13 @@ def _last_reply(hass: HomeAssistant, device_id: str | None) -> str | None:
 async def _remind(hass: HomeAssistant, who: Asker, slots: dict[str, Any], _: str | None) -> str:
     phone_service(hass, who)
     minutes = _minutes(slots)
-    if minutes is None:
-        return "I didn't catch when."
+    task = slots.get("task")
+    if minutes is None or not task:
+        return "I didn't catch that."
     reminder = {
         "id": uuid.uuid4().hex,
         "person": who.person,
-        "task": slots["task"],
+        "task": task,
         "at": (dt_util.utcnow() + timedelta(minutes=minutes)).isoformat(),
     }
     hass.data[DATA]["reminders"].append(reminder)
@@ -325,128 +264,40 @@ async def _add(hass: HomeAssistant, who: Asker, slots: dict[str, Any], _: str | 
     todo = who.record.get(LIST.name)
     if not todo:
         raise Refusal(f"{who.name}, there's no list set up for you.")
-    item = slots["item"]
+    item = slots.get("item")
+    if not item:
+        return "I didn't catch what to add."
     await hass.services.async_call(
         "todo", "add_item", {"entity_id": todo, "item": item}, blocking=True
     )
     return f"Added {item} to your list."
 
 
-ACTIONS = (
-    Personal(
-        "EchoLocalMyCalendar",
-        "Read the speaker's own calendar for today or tomorrow.",
-        [
-            (["(what's|what is) on my calendar [today]", "what do I have today"], {"day": "today"}),
-            (
-                ["(what's|what is) on my calendar tomorrow", "what do I have tomorrow"],
-                {"day": "tomorrow"},
-            ),
-        ],
-        {probatio.Optional("day"): probatio.In(["today", "tomorrow"])},
-        _calendar,
-        (CALENDARS,),
-    ),
-    Personal(
-        "EchoLocalFindMyPhone",
-        "Ring the speaker's own phone.",
-        [(["find my phone", "where's my phone", "call me", "ring my phone"], {})],
-        {},
-        _ring,
-        (PHONE,),
-    ),
-    Personal(
-        "EchoLocalSendToMyPhone",
-        "Send this device's last answer to the speaker's own phone.",
-        [(["send (that|it) to my phone"], {})],
-        {},
-        _send,
-        (PHONE,),
-    ),
-    Personal(
-        "EchoLocalRemindMe",
-        "Remind the speaker on their own phone after some minutes.",
-        [
-            (["remind me to {task} in {minutes} minute[s]"], {}),
-            (["remind me to {task} in {hours} hour[s]"], {}),
-        ],
-        {
-            probatio.Required("task"): intent.non_empty_string,
-            probatio.Optional("minutes"): probatio.Coerce(int),
-            probatio.Optional("hours"): probatio.Coerce(int),
-        },
-        _remind,
-        (PHONE,),
-    ),
-    Personal(
-        "EchoLocalAddToMyList",
-        "Add an item to the speaker's own to-do list.",
-        [(["add {item} to my [to-do|todo|shopping] list"], {})],
-        {probatio.Required("item"): intent.non_empty_string},
-        _add,
-        (LIST,),
-    ),
-)
+ACTION = "personal"
+
+OPERATIONS: dict[str, Handle] = {
+    "calendar": _calendar,
+    "ring": _ring,
+    "send": _send,
+    "remind": _remind,
+    "add": _add,
+}
 
 
-class PersonalHandler(intent.IntentHandler):
-    def __init__(self, action: Personal) -> None:
-        self.action = action
-        self.intent_type = action.intent_type
-        self.description = action.description
-
-    @property
-    def slot_schema(self) -> dict[Any, Any]:
-        return self.action.slots
-
-    async def async_handle(self, intent_obj: intent.Intent) -> intent.IntentResponse:
-        hass = intent_obj.hass
-        slots = {name: slot.get("value") for name, slot in intent_obj.slots.items()}
-        device_id = intent_obj.device_id
-        try:
-            who = await asker(hass, device_id)
-            speech = await self.action.handle(hass, who, slots, device_id)
-        except Refusal as refusal:
-            speech = refusal.speech
-        response = intent_obj.create_response()
-        response.async_set_speech(speech)
-        return response
-
-
-def _register_sentences(hass: HomeAssistant) -> None:
-    from homeassistant.components.conversation.agent_manager import get_agent_manager
-
-    manager = get_agent_manager(hass)
-    for action in ACTIONS:
-        for sentences, fixed in action.sentences:
-            manager.register_trigger(sentences, _answer(hass, action.intent_type, fixed))
-
-
-def _answer(hass: HomeAssistant, intent_type: str, fixed: dict[str, Any]):
-    async def answer(user_input: Any, result: Any) -> str | None:
-        slots = {**fixed, **{name: e.value for name, e in result.entities.items()}}
-        device_id = user_input.device_id
-        if user_input.satellite_id is not None:
-            entry = er.async_get(hass).async_get(user_input.satellite_id)
-            if entry is not None:
-                device_id = entry.device_id
-        try:
-            response = await intent.async_handle(
-                hass,
-                DOMAIN,
-                intent_type,
-                {name: {"value": value} for name, value in slots.items()},
-                user_input.text,
-                user_input.context,
-                user_input.language,
-                device_id=device_id,
-                satellite_id=user_input.satellite_id,
-            )
-        except intent.InvalidSlotInfo:
-            return "I didn't catch that."
-        return response.speech.get("plain", {}).get("speech")
-
-    return answer
+async def answer(
+    hass: HomeAssistant, device_id: str | None, who: Any, values: dict[str, Any]
+) -> str | None:
+    handle = OPERATIONS.get(str(values.get("operation", "")))
+    if handle is None or not isinstance(who, dict):
+        return None
+    slots = {k: v for k, v in values.items() if v not in (None, "")}
+    try:
+        return await handle(hass, asker(hass, who), slots, device_id)
+    except Refusal as refusal:
+        return refusal.speech
+    except HomeAssistantError as err:
+        _LOGGER.warning("personal %s failed: %s", values.get("operation"), err)
+        return None
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/people"})

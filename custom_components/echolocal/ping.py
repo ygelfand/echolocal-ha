@@ -5,7 +5,7 @@ from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, Supp
 
 from .const import DOMAIN
 
-PROTOCOLS = frozenset({1, 2, 3, 4, 5, 6})
+PROTOCOLS = frozenset({1, 2, 3, 4, 5, 6, 7})
 
 VERSION_ENTITY = "sensor.echolocal_protocol_version"
 
