@@ -38,6 +38,23 @@ interface Session {
   step: Record<string, string>;
 }
 
+interface Field {
+  name: string;
+  label: string;
+  selector: Record<string, unknown>;
+}
+
+interface Personal {
+  person: string;
+  record: Record<string, unknown>;
+  phone: string | null;
+}
+
+interface People {
+  fields: Field[];
+  people: Personal[];
+}
+
 const LOOSEST = 0.3;
 const STRICTEST = 0.7;
 const STEP = 0.01;
@@ -61,6 +78,7 @@ export class EchoLocalVoices extends LitElement {
   @state() private confirming = "";
   @state() private draft?: Draft;
   @state() private session?: Session;
+  @state() private personal?: People;
 
   private asked = false;
   private stops: (() => void)[] = [];
@@ -206,7 +224,8 @@ export class EchoLocalVoices extends LitElement {
     const picture = voice.person
       ? (this.hass.states[voice.person]?.attributes?.entity_picture as string | undefined)
       : undefined;
-    const people = this.people();
+    const taken = new Set(this.voices.filter((v) => v.id !== voice.id).map((v) => v.person));
+    const people = this.people().filter(([id]) => !taken.has(id));
     if (voice.person && !people.some(([id]) => id === voice.person)) {
       people.push([voice.person, `${voice.person} (missing)`]);
     }
@@ -265,7 +284,55 @@ export class EchoLocalVoices extends LitElement {
           <span class="value">${voice.threshold.toFixed(2)}</span>
         </label>
       </div>
+      ${voice.person ? this.renderPersonal(voice.person) : nothing}
     </div>`;
+  }
+
+  private renderPersonal(person: string) {
+    const personal = this.personal;
+    if (!personal) return nothing;
+    const found = personal.people.find((p) => p.person === person);
+    const record = found?.record ?? {};
+    return html`<details class="personal">
+      <summary>
+        <ha-icon class="chevron" icon="mdi:chevron-right"></ha-icon>
+        <span class="label">Person settings</span>
+        <span class="summary">${summary(record, found?.phone ?? null)}</span>
+      </summary>
+      <div class="fields">
+        ${personal.fields.map(
+          (f) => html`<div class="field">
+            <span class="caption">${f.label}</span>
+            <ha-selector
+              .hass=${this.hass}
+              .selector=${f.selector}
+              .value=${record[f.name]}
+              .helper=${f.name === "phone" && found?.phone && !record.phone ? "Their companion app phone" : ""}
+              @value-changed=${(e: CustomEvent<{ value: unknown }>) =>
+                void this.keep(person, { ...record, [f.name]: e.detail.value })}
+            ></ha-selector>
+          </div>`
+        )}
+      </div>
+    </details>`;
+  }
+
+  private async keep(person: string, record: Record<string, unknown>) {
+    const personal = this.personal;
+    if (!personal) return;
+    const found = personal.people.find((p) => p.person === person);
+    this.personal = {
+      ...personal,
+      people: [
+        ...personal.people.filter((p) => p.person !== person),
+        { person, phone: found?.phone ?? null, record },
+      ],
+    };
+    try {
+      await this.hass.callWS({ type: "echolocal/people/save", person, record });
+    } catch (err) {
+      this.error = `Saving ${this.nameOf(person)}'s settings failed: ${String((err as Error)?.message ?? err)}`;
+    }
   }
 
   private people(): [string, string][] {
@@ -413,13 +480,26 @@ export class EchoLocalVoices extends LitElement {
 
   private async load() {
     try {
-      const reply = await this.hass.callWS<{ voices: Voice[] }>({ type: "echolocal/voices" });
+      const [reply, personal] = await Promise.all([
+        this.hass.callWS<{ voices: Voice[] }>({ type: "echolocal/voices" }),
+        this.hass.callWS<People>({ type: "echolocal/people" }),
+      ]);
       this.voices = reply.voices;
+      this.personal = personal;
     } catch (err) {
       this.error = `Reading voices failed: ${String((err as Error)?.message ?? err)}`;
     }
     this.loaded = true;
   }
+}
+
+function summary(record: Record<string, unknown>, phone: string | null): string {
+  const parts: string[] = [];
+  if (record.phone || phone) parts.push("Phone");
+  const calendars = Array.isArray(record.calendars) ? record.calendars.length : 0;
+  if (calendars) parts.push(calendars === 1 ? "1 calendar" : `${calendars} calendars`);
+  if (record.list) parts.push("List");
+  return parts.length ? parts.join(" · ") : "Not set up";
 }
 
 function status(stage: string): string {

@@ -7,6 +7,8 @@ import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "./types";
 import styles from "./wakewords.css";
 
+const RESTART = "Restart Home Assistant to apply wake word changes.";
+
 export interface WakeWord {
   id: string;
   wake_word: string;
@@ -168,7 +170,7 @@ export class EchoLocalWakeWords extends LitElement {
     }
 
     this.busy = true;
-    this.said = "";
+    this.said = RESTART;
 
     for (const file of models) {
       const body = new FormData();
@@ -206,11 +208,13 @@ export class EchoLocalWakeWords extends LitElement {
       wake_word_id: word.id,
       wake_word: spoken,
     });
+    this.said = RESTART;
     await this.refresh();
   }
 
   private async discard(word: WakeWord) {
     await this.hass.callWS({ type: "echolocal/wake_words/delete", wake_word_id: word.id });
+    this.said = RESTART;
     await this.refresh();
   }
 

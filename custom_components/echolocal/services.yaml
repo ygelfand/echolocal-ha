@@ -82,6 +82,13 @@ voices:
       selector:
         text:
           multiline: true
+speaker:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: esphome
 music_queue:
   fields:
     player:

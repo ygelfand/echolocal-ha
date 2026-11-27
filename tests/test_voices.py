@@ -144,3 +144,24 @@ async def test_asking_with_no_changes_returns_the_household(hass: HomeAssistant)
         "echolocal", "voices", {}, blocking=True, return_response=True
     )
     assert [p["name"] for p in answer["profiles"]] == ["Ann"]
+
+
+async def test_a_person_can_be_linked_to_only_one_voice(hass: HomeAssistant, hass_ws_client):
+    await voices.async_setup(hass)
+    await voices._apply(
+        hass,
+        [
+            {"save": {**voice("person.alex", "Alex"), "person": "person.alex"}},
+            {"save": voice("sam", "Sam")},
+        ],
+    )
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id(
+        {"type": "echolocal/voices/person", "voice": "sam", "person": "person.alex"}
+    )
+    reply = await client.receive_json()
+    assert not reply["success"] and reply["error"]["code"] == "taken"
+    await client.send_json_auto_id(
+        {"type": "echolocal/voices/person", "voice": "person.alex", "person": "person.alex"}
+    )
+    assert (await client.receive_json())["success"]

@@ -1,9 +1,7 @@
 """CRUD over config/custom_wake_words/, which core serves to satellites but has no interface for.
 
-A wake word is two files: <id>.json and <id>.tflite. Three core behaviours worked around here:
+A wake word is two files: <id>.json and <id>.tflite. Two core behaviours worked around here:
 
-- it reads the directory once, behind @singleton(_DATA_WAKE_WORDS), so a new file does nothing
-  until restart. async_invalidate drops that cache.
 - it needs `type` and `wake_word`, and skips an entry missing either at debug level. _read
   reports what it would skip.
 - the json is hand-written. The upload view generates one from the filename.
@@ -20,21 +18,17 @@ from typing import Any
 import voluptuous as vol
 from aiohttp import web
 from homeassistant.components import websocket_api
-from homeassistant.components.esphome import assist_satellite as esphome_satellite
 from homeassistant.components.esphome.const import (
     WAKE_WORDS_API_PATH,
     WAKE_WORDS_DIR_NAME,
 )
 from homeassistant.components.http import HomeAssistantView
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import Unauthorized
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import slugify
 
 _LOGGER = logging.getLogger(__name__)
-
-# core's own key, not ours. Popping it is the only way to avoid a restart.
-CACHE_KEY = "wake_word_cache"
 
 # What a dropped .tflite almost always is, and what echod runs. Editable: core passes the type
 # through to the device without opinion.
@@ -58,18 +52,6 @@ async def async_setup(hass: HomeAssistant) -> None:
 
 def _dir(hass: HomeAssistant) -> Path:
     return Path(hass.config.path(WAKE_WORDS_DIR_NAME))
-
-
-@callback
-def async_invalidate(hass: HomeAssistant) -> None:
-    """Drop core's cached listing. It re-reads on its next connect or set_wake_words."""
-    hass.data.pop(CACHE_KEY, None)
-
-    # Core's sync @singleton also wraps the loader in functools.lru_cache, which returns its
-    # own result without looking at hass.data. Clear that as well or the pop above does nothing.
-    cache_clear = getattr(esphome_satellite._get_custom_wake_words, "cache_clear", None)
-    if cache_clear is not None:
-        cache_clear()
 
 
 def _read(store: Path) -> list[dict[str, Any]]:
@@ -187,7 +169,6 @@ class WakeWordUploadView(HomeAssistantView):
 
         store = _dir(hass)
         await hass.async_add_executor_job(_write, store, wake_id, payload, config)
-        async_invalidate(hass)
 
         return self.json({"id": wake_id, "wake_word": spoken})
 
@@ -260,7 +241,6 @@ async def ws_update(
         return config
 
     config = await hass.async_add_executor_job(edit)
-    async_invalidate(hass)
     connection.send_result(msg["id"], config)
 
 
@@ -294,5 +274,4 @@ async def ws_delete(
             path.unlink(missing_ok=True)
 
     await hass.async_add_executor_job(remove)
-    async_invalidate(hass)
     connection.send_result(msg["id"], {})

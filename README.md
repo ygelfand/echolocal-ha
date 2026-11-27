@@ -57,7 +57,7 @@ took. Where a recording was kept, you can play back what the microphones sent.
 ### Wake words
 
 Which device listens for what, and a library shared by every device. Drop in a `.tflite` to make it
-available to all of them.
+available to all of them. A new or edited wake word shows up after Home Assistant restarts.
 
 ![The wake word tab: which device listens for what, and the library table](docs/images/wake-words.png)
 

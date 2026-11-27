@@ -211,9 +211,15 @@ async def ws_threshold(
 async def ws_person(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
-    found = next((p for p in hass.data[DATA]["profiles"] if p["id"] == msg["voice"]), None)
+    profiles = hass.data[DATA]["profiles"]
+    found = next((p for p in profiles if p["id"] == msg["voice"]), None)
     if found is None:
         connection.send_error(msg["id"], "not_found", "No such voice")
+        return
+    if msg["person"] and any(
+        p.get("person") == msg["person"] and p["id"] != found["id"] for p in profiles
+    ):
+        connection.send_error(msg["id"], "taken", "That person already has a voice")
         return
     if await _apply(hass, [{"save": {**found, "person": msg["person"]}}]):
         hass.async_create_task(_push(hass))
