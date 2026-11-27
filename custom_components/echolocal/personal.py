@@ -9,7 +9,6 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
-from homeassistant.components.esphome import DOMAIN as ESPHOME_DOMAIN
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
@@ -52,13 +51,19 @@ class Asker:
     record: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class Outcome:
+    key: str
+    data: dict[str, Any] | None = None
+
+
 class Refusal(Exception):
-    def __init__(self, speech: str) -> None:
-        super().__init__(speech)
-        self.speech = speech
+    def __init__(self, key: str) -> None:
+        super().__init__(key)
+        self.key = key
 
 
-Handle = Callable[[HomeAssistant, Asker, dict[str, Any], str | None], Awaitable[str]]
+Handle = Callable[[HomeAssistant, Asker, dict[str, Any], str | None], Awaitable[Outcome]]
 
 
 async def async_setup(hass: HomeAssistant) -> None:
@@ -92,10 +97,10 @@ def asker(hass: HomeAssistant, who: dict[str, Any]) -> Asker:
     if match == PENDING:
         _LOGGER.info("voice match had not landed when a personal action asked")
     if match != KNOWN:
-        raise Refusal("I don't know whose voice that is.")
+        raise Refusal("unrecognized")
     person = who.get("person") or ""
     if not person:
-        raise Refusal(f"{who.get('name') or 'Sorry'}, your voice isn't linked to a person yet.")
+        raise Refusal("unlinked")
     return Asker(person, _name(hass, person), hass.data[DATA]["people"].get(person, {}))
 
 
@@ -115,14 +120,14 @@ def phone_service(hass: HomeAssistant, asker_: Asker) -> str:
     device_id = asker_.record.get(PHONE.name) or default_phone(hass, asker_.person)
     device = dr.async_get(hass).async_get(device_id) if device_id else None
     if device is None:
-        raise Refusal(f"{asker_.name}, there's no phone set up for you.")
+        raise Refusal("no_phone")
     for entry_id in device.config_entries:
         entry = hass.config_entries.async_get_entry(entry_id)
         if entry is not None and entry.domain == MOBILE_APP:
             service = slugify(f"{MOBILE_APP}_{entry.data['device_name']}")
             if hass.services.has_service("notify", service):
                 return service
-    raise Refusal(f"{asker_.name}, your phone can't take notifications.")
+    raise Refusal("no_notify")
 
 
 async def notify(hass: HomeAssistant, service: str, message: str, **data: Any) -> None:
@@ -132,11 +137,13 @@ async def notify(hass: HomeAssistant, service: str, message: str, **data: Any) -
     await hass.services.async_call("notify", service, payload, blocking=True)
 
 
-async def _calendar(hass: HomeAssistant, who: Asker, slots: dict[str, Any], _: str | None) -> str:
+async def _calendar(
+    hass: HomeAssistant, who: Asker, slots: dict[str, Any], _: str | None
+) -> Outcome:
     calendars = who.record.get(CALENDARS.name) or []
     if not calendars:
-        raise Refusal(f"{who.name}, there's no calendar set up for you.")
-    day = slots.get("day") or "today"
+        raise Refusal("calendar.none")
+    day = "tomorrow" if slots.get("day") == "tomorrow" else "today"
     start = dt_util.start_of_local_day() + timedelta(days=1 if day == "tomorrow" else 0)
     answer = await hass.services.async_call(
         "calendar",
@@ -149,66 +156,42 @@ async def _calendar(hass: HomeAssistant, who: Asker, slots: dict[str, Any], _: s
         blocking=True,
         return_response=True,
     )
-    events = [e for found in (answer or {}).values() for e in found.get("events", [])]
+    found = [e for listed in (answer or {}).values() for e in listed.get("events", [])]
+    events = list({(e["summary"], e["start"]): e for e in found}.values())
+    if day == "today":
+        now = dt_util.now()
+        events = [e for e in events if _ahead(e, now)]
     if not events:
-        return f"Nothing on your calendar {day}."
+        return Outcome(f"calendar.empty_{day}")
     events.sort(key=lambda e: e["start"])
     said = [_event(e) for e in events[:MOST_EVENTS]]
-    count = len(events)
-    lead = f"You have {count} thing{'s' if count != 1 else ''} {day}"
-    return f"{lead}: {', '.join(said)}."
+    return Outcome(
+        f"calendar.{day}",
+        {"Count": len(events), "Events": said, "More": max(0, len(events) - MOST_EVENTS)},
+    )
 
 
-def _event(event: dict[str, Any]) -> str:
+def _ahead(event: dict[str, Any], now: datetime) -> bool:
+    if "T" not in event["start"]:
+        return True
+    end = event.get("end") or event["start"]
+    return dt_util.as_local(datetime.fromisoformat(end)) > now
+
+
+def _event(event: dict[str, Any]) -> dict[str, str]:
     start = event["start"]
     if "T" not in start:
-        return f"{event['summary']} all day"
+        return {"Summary": event["summary"], "Time": ""}
     when = dt_util.as_local(datetime.fromisoformat(start))
-    return f"{event['summary']} at {when.strftime('%-I:%M %p')}"
+    return {"Summary": event["summary"], "Time": when.strftime("%H:%M")}
 
 
-async def _ring(hass: HomeAssistant, who: Asker, _: dict[str, Any], __: str | None) -> str:
-    service = phone_service(hass, who)
-    await notify(
-        hass,
-        service,
-        "Find my phone",
-        ttl=0,
-        priority="high",
-        channel="alarm_stream",
-        push={"sound": {"name": "default", "critical": 1, "volume": 1.0}},
-    )
-    return "Ringing your phone."
-
-
-async def _send(hass: HomeAssistant, who: Asker, _: dict[str, Any], device_id: str | None) -> str:
-    said = _last_reply(hass, device_id)
-    if not said:
-        return "There's nothing to send."
-    await notify(hass, phone_service(hass, who), said)
-    return "Sent to your phone."
-
-
-def _last_reply(hass: HomeAssistant, device_id: str | None) -> str | None:
-    if not device_id:
-        return None
-    device = dr.async_get(hass).async_get(device_id)
-    if device is None:
-        return None
-    for entry in er.async_entries_for_device(er.async_get(hass), device.via_device_id or device.id):
-        if entry.platform == ESPHOME_DOMAIN and entry.unique_id.endswith("-last_reply"):
-            state = hass.states.get(entry.entity_id)
-            if state is not None and state.state not in ("unknown", "unavailable", ""):
-                return state.state
-    return None
-
-
-async def _remind(hass: HomeAssistant, who: Asker, slots: dict[str, Any], _: str | None) -> str:
+async def _remind(hass: HomeAssistant, who: Asker, slots: dict[str, Any], _: str | None) -> Outcome:
     phone_service(hass, who)
     minutes = _minutes(slots)
     task = slots.get("task")
     if minutes is None or not task:
-        return "I didn't catch that."
+        return Outcome("remind.not_caught")
     reminder = {
         "id": uuid.uuid4().hex,
         "person": who.person,
@@ -218,7 +201,7 @@ async def _remind(hass: HomeAssistant, who: Asker, slots: dict[str, Any], _: str
     hass.data[DATA]["reminders"].append(reminder)
     await _save(hass)
     _schedule(hass, reminder)
-    return f"I'll remind you in {_span(minutes)}."
+    return Outcome("remind.set")
 
 
 def _minutes(slots: dict[str, Any]) -> int | None:
@@ -230,13 +213,6 @@ def _minutes(slots: dict[str, Any]) -> int | None:
     except (TypeError, ValueError):
         return None
     return None
-
-
-def _span(minutes: int) -> str:
-    if minutes % 60 == 0 and minutes >= 60:
-        hours = minutes // 60
-        return f"{hours} hour{'s' if hours != 1 else ''}"
-    return f"{minutes} minute{'s' if minutes != 1 else ''}"
 
 
 def _schedule(hass: HomeAssistant, reminder: dict[str, Any]) -> None:
@@ -260,33 +236,33 @@ def _schedule(hass: HomeAssistant, reminder: dict[str, Any]) -> None:
     )
 
 
-async def _add(hass: HomeAssistant, who: Asker, slots: dict[str, Any], _: str | None) -> str:
+async def _add(hass: HomeAssistant, who: Asker, slots: dict[str, Any], _: str | None) -> Outcome:
     todo = who.record.get(LIST.name)
     if not todo:
-        raise Refusal(f"{who.name}, there's no list set up for you.")
+        raise Refusal("add_to_list.no_list")
     item = slots.get("item")
     if not item:
-        return "I didn't catch what to add."
+        return Outcome("add_to_list.not_caught")
     await hass.services.async_call(
         "todo", "add_item", {"entity_id": todo, "item": item}, blocking=True
     )
-    return f"Added {item} to your list."
+    return Outcome("add_to_list.done")
 
 
 ACTION = "personal"
+REPLY = "reply"
+FAILED = "failed"
 
 OPERATIONS: dict[str, Handle] = {
     "calendar": _calendar,
-    "ring": _ring,
-    "send": _send,
     "remind": _remind,
-    "add": _add,
+    "add_to_list": _add,
 }
 
 
 async def answer(
     hass: HomeAssistant, device_id: str | None, who: Any, values: dict[str, Any]
-) -> str | None:
+) -> Outcome | None:
     handle = OPERATIONS.get(str(values.get("operation", "")))
     if handle is None or not isinstance(who, dict):
         return None
@@ -294,10 +270,10 @@ async def answer(
     try:
         return await handle(hass, asker(hass, who), slots, device_id)
     except Refusal as refusal:
-        return refusal.speech
+        return Outcome(refusal.key)
     except HomeAssistantError as err:
         _LOGGER.warning("personal %s failed: %s", values.get("operation"), err)
-        return None
+        return Outcome(FAILED)
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/people"})

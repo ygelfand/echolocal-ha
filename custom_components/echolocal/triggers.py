@@ -170,11 +170,45 @@ class Triggers:
             _LOGGER.warning("%s on %s failed: %s", name, node, err)
             return FAILED
         answer = _field(response, "answer")
-        if name == personal.ACTION and answer is not None:
-            reply = await personal.answer(self.hass, device_id, answer, values)
+        if name == personal.ACTION and isinstance(answer, dict):
+            reply = await self._personal(device_id, node, action, answer, values)
         else:
             reply = _reply(response)
         return FAILED if reply is None else reply
+
+    async def _personal(
+        self,
+        device_id: str | None,
+        node: str,
+        action: dict[str, Any],
+        answer: dict[str, Any],
+        values: dict[str, Any],
+    ) -> str | None:
+        replies = answer.get("replies") or {}
+        slots = answer.get("slots")
+        if isinstance(slots, dict):
+            values = {**values, **slots}
+        outcome = await personal.answer(self.hass, device_id, answer.get("speaker"), values)
+        if outcome is not None and outcome.key in replies:
+            return replies[outcome.key]
+        if outcome is not None and outcome.data is not None:
+            data = {arg["name"]: _typed(arg.get("type"), None) for arg in action.get("args", [])}
+            data.update(operation=personal.REPLY, key=outcome.key, data=json.dumps(outcome.data))
+            try:
+                response = await self.hass.services.async_call(
+                    ESPHOME_DOMAIN,
+                    f"{node}_{personal.ACTION}",
+                    data,
+                    blocking=True,
+                    return_response=True,
+                )
+            except HomeAssistantError as err:
+                _LOGGER.warning("phrasing %s on %s failed: %s", outcome.key, node, err)
+                response = None
+            phrased = _field(_field(response, "answer"), "reply")
+            if isinstance(phrased, str) and phrased:
+                return phrased
+        return replies.get(personal.FAILED)
 
     def as_dict(self) -> dict[str, Any]:
         return {
