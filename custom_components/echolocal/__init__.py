@@ -7,6 +7,7 @@ from pathlib import Path
 from homeassistant.components import frontend, panel_custom
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.loader import async_get_integration
 
@@ -35,6 +36,8 @@ from .const import (
 )
 
 type EchoLocalEntry = ConfigEntry[None]
+
+PLATFORMS = [Platform.SENSOR]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: EchoLocalEntry) -> bool:
@@ -65,12 +68,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: EchoLocalEntry) -> bool:
     if entry.options.get(CONF_SIDEBAR, True):
         await _async_register_panel(hass, version)
 
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: EchoLocalEntry) -> bool:
     """Remove the panel. The static path and the card stay; there is no way to unregister them."""
+    if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        return False
     _async_remove_panel(hass)
     return True
 

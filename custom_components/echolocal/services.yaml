@@ -78,7 +78,7 @@ voices:
   fields:
     changes:
       required: false
-      example: '[{"remove": "person.yuri"}]'
+      example: '[{"remove": "person.alex"}]'
       selector:
         text:
           multiline: true

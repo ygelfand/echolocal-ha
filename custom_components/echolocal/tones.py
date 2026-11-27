@@ -235,7 +235,7 @@ class ToneFileView(HomeAssistantView):
             path = store / meta["original_file"]
         else:
             return web.Response(status=404)
-        if not path.is_file():
+        if not await hass.async_add_executor_job(path.is_file):
             return web.Response(status=404)
         return web.FileResponse(path)
 

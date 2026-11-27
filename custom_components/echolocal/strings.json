@@ -24,6 +24,11 @@
       }
     }
   },
+  "entity": {
+    "sensor": {
+      "protocol_version": { "name": "Protocol version" }
+    }
+  },
   "services": {
     "dashboards": {
       "name": "List dashboards",

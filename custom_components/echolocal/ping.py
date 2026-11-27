@@ -23,4 +23,3 @@ def async_setup(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN, "ping", ping, schema=SCHEMA, supports_response=SupportsResponse.ONLY
     )
-    hass.states.async_set(VERSION_ENTITY, str(max(PROTOCOLS)))

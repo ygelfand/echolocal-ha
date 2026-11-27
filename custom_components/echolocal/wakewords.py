@@ -237,7 +237,7 @@ async def ws_update(
 ) -> None:
     """Correct a description, which is what fixes one core is dropping."""
     try:
-        path = _file(_dir(hass), msg["wake_word_id"], ".json")
+        path = await hass.async_add_executor_job(_file, _dir(hass), msg["wake_word_id"], ".json")
     except ValueError as err:
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
@@ -281,7 +281,10 @@ async def ws_delete(
     store = _dir(hass)
 
     try:
-        doomed = [_file(store, msg["wake_word_id"], suffix) for suffix in (".json", ".tflite")]
+        doomed = [
+            await hass.async_add_executor_job(_file, store, msg["wake_word_id"], suffix)
+            for suffix in (".json", ".tflite")
+        ]
     except ValueError as err:
         connection.send_error(msg["id"], "invalid_format", str(err))
         return

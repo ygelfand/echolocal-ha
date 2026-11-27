@@ -12,9 +12,9 @@ def voice(id_: str, name: str, threshold: float = 0.5) -> dict:
 async def test_changes_apply_in_arrival_order_and_the_list_comes_back(hass: HomeAssistant):
     await voices.async_setup(hass)
     changes = [
-        {"save": voice("person.yuri", "Yuri")},
+        {"save": voice("person.alex", "Alex")},
         {"save": voice("person.beth", "Beth")},
-        {"save": voice("person.yuri", "Yuri", 0.6)},
+        {"save": voice("person.alex", "Alex", 0.6)},
         {"remove": "person.beth"},
     ]
     answer = await hass.services.async_call(
@@ -24,7 +24,7 @@ async def test_changes_apply_in_arrival_order_and_the_list_comes_back(hass: Home
         blocking=True,
         return_response=True,
     )
-    assert [(p["id"], p["threshold"]) for p in answer["profiles"]] == [("person.yuri", 0.6)]
+    assert [(p["id"], p["threshold"]) for p in answer["profiles"]] == [("person.alex", 0.6)]
 
 
 async def test_an_invalid_voice_is_skipped(hass: HomeAssistant):
