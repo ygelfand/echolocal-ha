@@ -277,6 +277,7 @@ async def answer(
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/people"})
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_people(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]

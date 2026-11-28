@@ -177,6 +177,19 @@ async def test_a_reminder_without_a_number_is_not_caught(hass: HomeAssistant, ri
     assert await ask(hass, "remind", task="stretch", minutes="ten") == Outcome("remind.not_caught")
 
 
+async def test_only_administrators_read_the_people(
+    hass: HomeAssistant, rig, hass_ws_client, hass_admin_user
+):
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "echolocal/people"})
+    assert (await client.receive_json())["success"]
+
+    hass_admin_user.groups = []
+    await client.send_json_auto_id({"type": "echolocal/people"})
+    reply = await client.receive_json()
+    assert not reply["success"] and reply["error"]["code"] == "unauthorized"
+
+
 ARGS = [
     {"name": name, "type": "string"}
     for name in ("operation", "day", "task", "minutes", "hours", "item", "key", "data")
